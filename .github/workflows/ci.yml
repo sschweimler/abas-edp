@@ -11,11 +11,21 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Mehrere Versionen, weil sich der eingebaute Test-Runner zwischen
+        # den Hauptversionen unterschiedlich verhaelt - Node 20 betrachtet
+        # jede .js-Datei unterhalb von test/ als Testdatei, Node 18 nur
+        # solche mit *.test.js. Genau daran ist der erste CI-Lauf
+        # gescheitert, waehrend lokal alles gruen war.
+        node: ["18", "20", "22"]
+    name: Tests (Node ${{ matrix.node }})
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
       - run: npm test

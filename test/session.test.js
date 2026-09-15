@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { startMockServer } = require("./mock-server");
+const { startMockServer } = require("../scripts/mock-server");
 const { connect, EdpError } = require("../dist/index");
 
 async function mitServer(fn, optionen) {

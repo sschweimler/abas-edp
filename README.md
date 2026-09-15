@@ -98,6 +98,12 @@ npm test          # baut und prüft gegen einen Mock-Server, kein ERP nötig
 ABAS_PASSWORD=... npm run smoke -- --host abas-server --client entw
 ```
 
+Unter `test/` liegen ausschließlich Dateien mit der Endung `.test.js`.
+Hilfsprogramme — der Mock-Server und der Rauchtest gegen ein echtes
+System — stehen bewusst in `scripts/`: Node betrachtet ab Version 20
+**jede** `.js`-Datei unterhalb von `test/` als Testdatei und würde sie
+sonst mitlaufen lassen.
+
 Veröffentlicht wird über einen Versions-Tag:
 
 ```bash
