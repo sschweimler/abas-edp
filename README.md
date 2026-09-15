@@ -91,6 +91,44 @@ const session = await connect({
 
 Mit `options: {}` bleiben die abas-Vorgaben unangetastet.
 
+## Schreiben
+
+```ts
+const { ref, num } = await session.edit(
+  () => session.createRecord("31:1"),
+  async (editor) => {
+    await editor.setField("such", "WIP.12A");
+    await editor.setField("plbez", "Halle 12, Platz A");
+    await editor.insertRow();                    // Zeile im Tabellenteil
+    await editor.setField("ipmgvb", "2.5", 1);   // Feld in Zeile 1
+  }
+);
+// ref = "(186,31,0)", num = "34"
+```
+
+`edit()` ist der empfohlene Weg: Es speichert bei Erfolg und bricht bei
+einem Fehler ab. Eine offen gebliebene Editoraktion blockiert sonst die
+ganze Sitzung — abas lässt bei Exklusiveditoren keinen zweiten zu, und
+der Folgefehler tritt dann weit entfernt von seiner Ursache auf.
+
+Zum Ändern `session.editRecord("(186,31,0)")` statt `createRecord`.
+
+Zwei Dinge, die die Spezifikation nicht hergibt und die am System
+ermittelt wurden:
+
+- **`NEW` bekommt nur die Gruppe.** Objektbezugsart und Objektbezug
+  bleiben leer; sie dienen dem Anlegen *mit Bezug* auf ein bestehendes
+  Objekt. Das in der Doku zum Kommando `EDI` erwähnte `EMPTY` gilt nicht
+  für `NEW` — dort antwortet der Server mit „EMPTY: nicht gefunden".
+- **`GTS` antwortet mit einer Datenmenge, nicht mit `ACK`** — je
+  Eigenschaft eine `D`-Zeile. Wer auf ein `ACK` wartet, wartet endlos.
+  Die Referenz eines neu angelegten Satzes steht erst **nach** dem
+  `COM` darin; vorher liefert `REF` den Wert `(0,0,0)`.
+
+Zahlen werden beim Schreiben **nicht** umformatiert: Welche Schreibweise
+der Server erwartet, hängt an `NUMMODE`. Mit der Vorgabe `RAW` ist es der
+Dezimalpunkt.
+
 ### Mitschnitt
 
 ```ts
@@ -128,19 +166,20 @@ Drumherum. Erledigt sind:
 
 ## Stand
 
-Umgesetzt ist das **Lesen**: verbinden, anmelden, Darstellungsoptionen
-setzen, Kommandos mit `ACK`/`NAK`-Antwort, Selektionen (`EXQ`) samt
-seitenweisem Weiterlesen (`GNR`), Datenmengen einschließlich
-Fortsetzungssätzen, abmelden.
+Umgesetzt sind **Lesen und Schreiben**: verbinden, anmelden,
+Darstellungsoptionen setzen, Kommandos mit `ACK`/`NAK`-Antwort,
+Selektionen (`EXQ`) samt seitenweisem Weiterlesen (`GNR`), Datenmengen
+einschließlich Fortsetzungssätzen, Editoraktionen zum Anlegen und Ändern
+(`NEW`, `UPD`, `SFV`, `RIN`, `RDL`, `GTS`, `COM`, `CAN`), abmelden.
 
 Am echten System geprüft gegen abas 2101r8n20p31 / EDP 3.55: Die
 gelesenen Datensätze stimmen mit denen überein, die dieselbe Anwendung
 über die REST-Middleware sieht — gleiche Anzahl, gleiche Werte, und eine
 über REST geschriebene Menge von 2,5 kommt über EDP als `2.500` zurück.
 
-Noch nicht umgesetzt: Editorkommandos zum **Schreiben** (`EDI`, `SFV`,
-`RIN`, `COM`), Infosystem-Aufrufe, Transaktionen (`TA`), Sperren (`LCK`),
-Dialogbeantwortung (`DLG`), Fortsetzungssätze beim Senden.
+Noch nicht umgesetzt: Infosystem-Aufrufe, Transaktionen (`TA`), Sperren
+(`LCK`), Freitextfelder (`SFT`), Dialogbeantwortung (`DLG`),
+Fortsetzungssätze beim Senden.
 
 Die Wildcard-Syntax für Selektionskriterien ist noch offen: `such=WIP.*`
 und `such=WIP.@` liefern beide nichts, während `pbanr=1497` einwandfrei

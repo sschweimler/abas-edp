@@ -20,6 +20,10 @@ function startMockServer(options = {}) {
     /** Per SET gesetzte Darstellungsoptionen. */
     const optionen = {};
     let letzteAbfrage = null;
+    /** Offene Editoraktion - es darf nur eine geben (Exklusiveditor). */
+    let editor = null;
+    let gespeichert = 0;
+    let zuletztGespeichert = null;
 
     const send = (line) => socket.write(Buffer.from(line + "\n", "latin1"));
 
@@ -96,6 +100,90 @@ function startMockServer(options = {}) {
           send(`D|${zielTid}|WIP.1494.20260914152223|1494|1|`);
           // eof=1: fertig
           send(`EOD|${zielTid}|1|1|1|`);
+          continue;
+        }
+
+        // --- Editoraktionen ------------------------------------------
+        if (command === "NEW" || command === "UPD") {
+          if (editor) {
+            // Exklusiveditor: ein zweiter ist nicht erlaubt
+            send(`NAK|${tid}|Es ist bereits ein Editor aktiv|4711||`);
+            continue;
+          }
+          editor = { tid, felder: {}, zeilen: 0, aktion: command };
+          send(`ACK|${tid}|Editor geoeffnet|`);
+          continue;
+        }
+
+        if (command === "SFV") {
+          if (!editor || editor.tid !== tid) {
+            send(`NAK|${tid}|Keine Editoraktion mit dieser Aktions-ID|4712||`);
+            continue;
+          }
+          const zeile = fields[2] || "0";
+          const feld = fields[3];
+          const wert = fields[4];
+          if (feld === "gibtesnicht") {
+            send(`E|${tid}|Das Feld gibtesnicht existiert nicht.|ERROR|1|||||`);
+            send(`NAK|${tid}|Ungueltiger Feldname|1361||`);
+            continue;
+          }
+          editor.felder[`${zeile}:${feld}`] = wert;
+          send(`ACK|${tid}|Feld gesetzt|`);
+          continue;
+        }
+
+        if (command === "RIN") {
+          if (!editor || editor.tid !== tid) {
+            send(`NAK|${tid}|Keine Editoraktion|4712||`);
+            continue;
+          }
+          editor.zeilen += 1;
+          send(`ACK|${tid}|Zeile eingefuegt|`);
+          continue;
+        }
+
+        // GTS antwortet mit einer Datenmenge, NICHT mit ACK - je
+        // Eigenschaft eine D-Zeile. Genau das hat der Mock frueher falsch
+        // nachgebildet und damit einen Fehler in der Bibliothek gedeckt.
+        if (command === "GTS") {
+          const bezug = editor && editor.tid === tid ? editor : zuletztGespeichert;
+          if (!bezug) {
+            send(`NAK|${tid}|Keine Editoraktion|4712||`);
+            continue;
+          }
+          const werte = {
+            NUMROWS: String(bezug.zeilen),
+            ACTION: bezug.aktion,
+            MODIFIED: "1",
+            // Bei der Neuanlage vor dem Speichern (0,0,0), danach echt.
+            REF: bezug.ref || "(0,0,0)",
+            NUM: bezug.num || "",
+          };
+          send(`BOD|${tid}|${Object.keys(werte).length}||`);
+          for (const [name, wert] of Object.entries(werte)) send(`D|${tid}|${name}|${wert}|`);
+          send(`EOD|${tid}|1|${Object.keys(werte).length}|1|`);
+          continue;
+        }
+
+        if (command === "COM") {
+          if (!editor || editor.tid !== tid) {
+            send(`NAK|${tid}|Keine Editoraktion|4712||`);
+            continue;
+          }
+          gespeichert += 1;
+          editor.ref = `(${200 + gespeichert},31,0)`;
+          editor.num = String(1000 + gespeichert);
+          zuletztGespeichert = editor;
+          editor = null;
+          // Die ACK-Antwort traegt nur die Meldung, nicht die Referenz.
+          send(`ACK|${tid}|Daten erfolgreich gespeichert|`);
+          continue;
+        }
+
+        if (command === "CAN") {
+          editor = null;
+          send(`ACK|${tid}|Aktion abgebrochen|`);
           continue;
         }
 

@@ -2,6 +2,7 @@ import os from "node:os";
 import { EdpConnection, type ConnectionOptions } from "./connection";
 import { appendContinuation, type EdpRecord } from "./record";
 import { EdpError } from "./errors";
+import { EdpEditor } from "./editor";
 
 export interface LoginOptions extends ConnectionOptions {
   /** Mandant, z. B. "entw". */
@@ -323,6 +324,71 @@ export class EdpSession {
           }
       }
     }
+  }
+
+  /**
+   * Beginnt eine Neuanlage (NEW) und liefert die offene Editoraktion.
+   *
+   * Die Aktion muss mit commit() oder cancel() beendet werden - sonst
+   * bleibt sie offen und blockiert bei Exklusiveditoren jede weitere.
+   * Bequemer und sicherer ist edit().
+   */
+  async createRecord(table: string): Promise<EdpEditor> {
+    const tid = this.connection.takeTid();
+    // NEW|TID|Datenbank[:Gruppe]|[Objektbezugsart]|[Objektbezug]|
+    //
+    // Objektbezugsart und Objektbezug bleiben leer. Sie dienen dem Anlegen
+    // MIT Bezug auf ein bestehendes Objekt; fuer eine schlichte Neuanlage
+    // gibt es kein Bezugsobjekt. Am echten System geprueft: "31:1" allein
+    // wird angenommen ("Objekt ist zur Bearbeitung geladen"), waehrend
+    // "REF" mit leerem Bezug mit "Ungültige Objektangabe" (1582)
+    // scheitert. Das in der Doku zum Kommando EDI erwaehnte "EMPTY" gilt
+    // fuer EDI, nicht fuer NEW - dort quittiert der Server es mit
+    // "EMPTY: nicht gefunden".
+    this.connection.send("NEW", tid, [table]);
+    await expectAck(this.connection, `NEW ${table}`);
+    return new EdpEditor(this.connection, tid);
+  }
+
+  /**
+   * Beginnt eine Aenderung (UPD) und liefert die offene Editoraktion.
+   *
+   * `reference` ist entweder eine Satzreferenz wie "(155,31,0)" - dann
+   * `by` auf "REF" lassen - oder eine Identnummer bzw. ein eindeutiges
+   * Suchwort mit `by: "NUMSW"`.
+   */
+  async editRecord(
+    reference: string,
+    options: { table?: string; by?: "REF" | "NUMSW" } = {}
+  ): Promise<EdpEditor> {
+    const tid = this.connection.takeTid();
+    this.connection.send("UPD", tid, [options.table ?? "", options.by ?? "REF", reference]);
+    await expectAck(this.connection, `UPD ${reference}`);
+    return new EdpEditor(this.connection, tid);
+  }
+
+  /**
+   * Fuehrt eine Editoraktion aus und raeumt sie zuverlaessig ab: Bei
+   * Erfolg wird gespeichert, bei einem Fehler abgebrochen.
+   *
+   * Das ist der empfohlene Weg. Eine offen gebliebene Aktion blockiert
+   * sonst die Sitzung, und der Fehler zeigt sich erst beim naechsten
+   * Kommando - weit entfernt von seiner Ursache.
+   */
+  async edit<T>(
+    start: () => Promise<EdpEditor>,
+    work: (editor: EdpEditor) => Promise<T>
+  ): Promise<{ result: T; ref: string; num: string }> {
+    const editor = await start();
+    let result: T;
+    try {
+      result = await work(editor);
+    } catch (error) {
+      await editor.cancel();
+      throw error;
+    }
+    const { ref, num } = await editor.commit();
+    return { result, ref, num };
   }
 
   /** Meldet ab und schliesst die Verbindung - gibt die Lizenz frei. */

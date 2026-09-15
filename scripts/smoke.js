@@ -68,10 +68,14 @@ async function main() {
     pageSize: 10,
   });
   const schluessel = plaetze.records.map((r) => r.such);
-  console.log(`    ${schluessel.length} Saetze: ${schluessel.slice(0, 5).join(", ")} ...`);
-  pruefe("19 Liegeplaetze wie ueber REST", schluessel.length === 19, `gelesen: ${schluessel.length}`);
-  pruefe("WIP.01H enthalten", schluessel.includes("WIP.01H"));
-  pruefe("WIP.11M enthalten", schluessel.includes("WIP.11M"));
+  // Nur die aktiven zaehlen - das sind die, die die Anwendung anbietet.
+  // Die Gesamtzahl waere sproede: Schreibtests legen inaktive Saetze an,
+  // und jede Pflege im Mandanten aendert sie ohnehin.
+  const aktive = plaetze.records.filter((r) => r.plaktiv === "1").map((r) => r.such);
+  console.log(`    ${schluessel.length} Saetze, davon ${aktive.length} aktiv: ${aktive.slice(0, 5).join(", ")} ...`);
+  pruefe("19 aktive Liegeplaetze wie ueber REST", aktive.length === 19, `aktiv: ${aktive.length}`);
+  pruefe("WIP.01H enthalten und aktiv", aktive.includes("WIP.01H"));
+  pruefe("WIP.11M enthalten und aktiv", aktive.includes("WIP.11M"));
   pruefe(
     "aktiv als 0/1 statt ja/nein (BOOLMODE=NUM)",
     ["0", "1"].includes(plaetze.records[0].plaktiv),
@@ -96,7 +100,10 @@ async function main() {
         `${r.pmge.padStart(6)} ${r.peinh.padEnd(5)} Status ${r.pstatus}`
     );
   }
-  pruefe("8 Datensets wie ueber REST", datensets.records.length === 8, `gelesen: ${datensets.records.length}`);
+  // Keine feste Anzahl pruefen: Das ist Livedaten, die sich durch jede
+  // Nutzung der Anwendung aendern. Geprueft wird stattdessen ein
+  // bestimmter, bekannter Datensatz.
+  pruefe("Datensets gelesen", datensets.records.length > 0, `${datensets.records.length} Saetze`);
 
   const ba1479 = datensets.records.find((r) => r.such === "WIP.1479.20260914135157");
   pruefe("Datensatz (155,31,0) gefunden", Boolean(ba1479));
@@ -131,6 +138,56 @@ async function main() {
     gefiltert.records[0]?.iplgpl === "WIP.03M",
     JSON.stringify(gefiltert.records[0]?.iplgpl)
   );
+
+  // --- Stufe 3: Schreiben ------------------------------------------------
+  // Nur auf ausdrueckliche Anforderung: Ein Rauchtest, der ungefragt in ein
+  // ERP schreibt, waere keine gute Idee.
+  if (process.argv.includes("--write")) {
+    console.log("\nSchreibtest (Liegeplatz anlegen und aendern):");
+    // Eindeutiger Schluessel je Lauf. abas laesst in dieser Gruppe
+    // gleichnamige Saetze zu, und ein fester Schluessel haeuft bei
+    // wiederholten Laeufen Doppel an - dann prueft man am Ende den
+    // falschen Satz. (Genau das ist beim ersten Versuch passiert.)
+    const schluessel = `WIP.TEST.${Date.now().toString().slice(-8)}`;
+
+    // plaktiv=0: Der Satz ist inaktiv und taucht damit in der Auswahl der
+    // WIP-Anwendung nicht auf - ein Testdatensatz soll sich nicht in die
+    // Oberflaeche schleichen.
+    const angelegt = await session.edit(
+      () => session.createRecord("31:1"),
+      async (editor) => {
+        await editor.setField("such", schluessel);
+        await editor.setField("plbez", "Testsatz aus abas-edp");
+        await editor.setField("plaktiv", "0");
+        await editor.setField("plsort", "999");
+      }
+    );
+    console.log(`    angelegt: ${angelegt.ref} (Identnummer ${angelegt.num})`);
+    pruefe("Referenz zurueckgeliefert", /^\(\d+,\d+,\d+\)$/.test(angelegt.ref), angelegt.ref);
+
+    const nachAnlage = await session.selectAll({
+      table: "31:1",
+      criteria: `such=${schluessel}`,
+      fields: ["such", "plbez", "plaktiv", "plsort"],
+    });
+    pruefe("Satz wiedergefunden", nachAnlage.records.length === 1, `${nachAnlage.records.length} Treffer`);
+    pruefe("Bezeichnung gespeichert", nachAnlage.records[0]?.plbez === "Testsatz aus abas-edp");
+    pruefe("inaktiv, taucht nicht in der Auswahl auf", nachAnlage.records[0]?.plaktiv === "0");
+
+    await session.edit(
+      () => session.editRecord(angelegt.ref, { by: "REF" }),
+      async (editor) => editor.setField("plbez", "Testsatz geaendert")
+    );
+
+    const nachAenderung = await session.selectAll({
+      table: "31:1",
+      criteria: `such=${schluessel}`,
+      fields: ["such", "plbez"],
+    });
+    pruefe("Aenderung gespeichert", nachAenderung.records[0]?.plbez === "Testsatz geaendert", nachAenderung.records[0]?.plbez);
+
+    console.log(`    Hinweis: Der Testsatz ${schluessel} bleibt stehen (inaktiv).`);
+  }
 
   await session.close();
 
