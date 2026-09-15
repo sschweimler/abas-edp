@@ -129,6 +129,42 @@ Zahlen werden beim Schreiben **nicht** umformatiert: Welche Schreibweise
 der Server erwartet, hängt an `NUMMODE`. Mit der Vorgabe `RAW` ist es der
 Dezimalpunkt.
 
+## Infosysteme
+
+```ts
+const is = await session.openInfosystem("PRODLIST", { workingDir: "owfe" });
+try {
+  await is.setField("bba", "1");
+  await is.setField("kba", "1479");
+  await is.click("bstart");                       // Startbutton
+  const zeilen = await is.getFields(["order", "art", "frgmge"], "*");
+} finally {
+  await is.cancel();   // Infosysteme werden nicht gespeichert
+}
+```
+
+Buttons sind in abas gewöhnliche Felder — geklickt wird, indem man sie
+setzt. Gelesen wird mit `getFields()`: ohne Zeilenangabe die Kopffelder,
+mit `"*"` alle Tabellenzeilen; möglich sind auch Zeilennummern, Bereiche
+wie `"1-5"`, Listen wie `"1;#"` und `$`-Selektionen.
+
+Geöffnet wird über das Tippkommando `Infosystem` — das ist der Text in
+der **Bediensprache**. In einem anderssprachigen Mandanten den passenden
+über `typedCommand` setzen.
+
+Ein Infosystem wird mit `cancel()` beendet, nie mit `commit()`.
+
+## Werte-Normalisierung
+
+Verweise kommen in der Externdarstellung auf Feldbreite aufgefüllt —
+`"        1479"` statt `"1479"`. Das ist Darstellungsbreite, kein Inhalt,
+und unbehandelt scheitert jeder Vergleich daran. Das Paket entfernt
+umschließende Leerzeichen deshalb beim Lesen; mit `trimValues: false`
+bleibt der Rohwert erhalten.
+
+Anders als `NUMMODE` & Co. ist das **keine** Servereinstellung, sondern
+eine Normalisierung dieses Pakets.
+
 ### Mitschnitt
 
 ```ts
@@ -177,9 +213,18 @@ gelesenen Datensätze stimmen mit denen überein, die dieselbe Anwendung
 über die REST-Middleware sieht — gleiche Anzahl, gleiche Werte, und eine
 über REST geschriebene Menge von 2,5 kommt über EDP als `2.500` zurück.
 
-Noch nicht umgesetzt: Infosystem-Aufrufe, Transaktionen (`TA`), Sperren
-(`LCK`), Freitextfelder (`SFT`), Dialogbeantwortung (`DLG`),
-Fortsetzungssätze beim Senden.
+Infosysteme laufen ebenfalls: PRODLIST (100003) liefert über EDP dieselben
+Zeilen wie über die REST-Middleware — gefiltert auf eine BA in 0,3 s,
+unfiltert 123 Zeilen in 12,6 s.
+
+Bemerkenswert dabei: Der unfilterte Aufruf, der über die REST-Middleware
+**unbegrenzt hängt** (keine Antwort, kein Fehler), läuft über EDP
+anstandslos durch. Der Hänger ist demnach ein Artefakt der Middleware,
+nicht des Infosystems.
+
+Noch nicht umgesetzt: Transaktionen (`TA`), Sperren (`LCK`),
+Freitextfelder (`SFT`), Dialogbeantwortung (`DLG`), Fortsetzungssätze
+beim Senden.
 
 Die Wildcard-Syntax für Selektionskriterien ist noch offen: `such=WIP.*`
 und `such=WIP.@` liefern beide nichts, während `pbanr=1497` einwandfrei

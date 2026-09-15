@@ -187,6 +187,49 @@ function startMockServer(options = {}) {
           continue;
         }
 
+        // EDI|TID|DO|Infosystem||<Suchwort>| oeffnet ein Infosystem.
+        if (command === "EDI") {
+          if (fields[2] !== "DO") {
+            send(`NAK|${tid}|Nur Tippkommandos werden nachgebildet|1||`);
+            continue;
+          }
+          if (!fields[5]) {
+            send(`E|${tid}|Infosystem : kein Suchwort angegeben|ERROR|1|||||`);
+            send(`NAK|${tid}|Vorgang nicht moeglich|2619||`);
+            continue;
+          }
+          editor = { tid, felder: {}, zeilen: 0, aktion: "DO", infosystem: fields[5] };
+          send(`ACK|${tid}|Objekt ist zur Bearbeitung geladen|`);
+          continue;
+        }
+
+        // GFV antwortet je FELD mit einer Zeile, nicht je Datensatz:
+        // D|TID|Zeile|Feldname|Wert|... - und Verweise kommen in der
+        // Externdarstellung auf Feldbreite aufgefuellt.
+        if (command === "GFV") {
+          if (!editor || editor.tid !== tid) {
+            send(`NAK|${tid}|Keine Editoraktion|4712||`);
+            continue;
+          }
+          const zeilenangabe = fields[2] || "";
+          const feldliste = (fields[3] || "").split(",").filter(Boolean);
+          const daten =
+            zeilenangabe === "*"
+              ? [
+                  { zeile: "1", order: "        1479", art: "                100481", frgmge: "10" },
+                  { zeile: "2", order: "     1479001", art: "        A 00015", frgmge: "9" },
+                ]
+              : [{ zeile: "0", kba: "", bba: "1" }];
+          send(`BOD|${tid}|${daten.length}||`);
+          for (const satz of daten) {
+            for (const feld of feldliste) {
+              send(`D|${tid}|${satz.zeile}|${feld}|${satz[feld] ?? ""}|||`);
+            }
+          }
+          send(`EOD|${tid}|1|${daten.length}|1|`);
+          continue;
+        }
+
         if (command === "GTN") {
           send(`BOD|${tid}|||`);
           send(`S|${tid}|Lese Tabellen ...|`);
@@ -194,9 +237,12 @@ function startMockServer(options = {}) {
           // Sonderzeichen im Feldwert
           send(`D|${tid}|Artikel|Bez mit \\| und \\n und \\\\|2:1|`);
           // Ueberlange Zeile: endet ohne Trenner, zwei DC-Saetze folgen
-          send(`D|${tid}|Lieferant|Anfang`);
-          send(`DC|${tid}|-Mitte`);
-          send(`DC|${tid}|-Ende|1:1|`);
+          // Die Bruchstelle liegt hier absichtlich auf einem Leerzeichen:
+          // Wuerde beim Zusammensetzen zu frueh getrimmt, entstuende
+          // "AnfangMitte" statt "Anfang Mitte".
+          send(`D|${tid}|Lieferant|Anfang `);
+          send(`DC|${tid}|Mitte`);
+          send(`DC|${tid}| Ende|1:1|`);
           send(`EOD|${tid}|1|3|0|`);
           continue;
         }

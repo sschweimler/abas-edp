@@ -288,6 +288,10 @@ export class EdpSession {
 
       switch (record.command) {
         case "D":
+          // Bewusst NICHT hier normalisieren: Eine DC-Fortsetzung wird an
+          // das letzte Feld angehaengt, und ein vorzeitig entferntes
+          // Leerzeichen an der Bruchstelle waere fuer immer weg. Getrimmt
+          // wird erst, wenn die Zeile vollstaendig ist (siehe EOD).
           current = [...record.fields];
           rows.push(current);
           break;
@@ -303,7 +307,10 @@ export class EdpSession {
 
         case "EOD":
           return {
-            rows,
+            // Jetzt sind alle Fortsetzungen eingearbeitet, also kann
+            // normalisiert werden (Externdarstellung ist auf Feldbreite
+            // aufgefuellt, siehe ConnectionOptions.trimValues).
+            rows: rows.map((zeile) => zeile.map((feld) => this.connection.normalize(feld))),
             ok: record.fields[0] === "1",
             hasMore: record.fields[2] === "0",
             meta,
@@ -364,6 +371,38 @@ export class EdpSession {
     const tid = this.connection.takeTid();
     this.connection.send("UPD", tid, [options.table ?? "", options.by ?? "REF", reference]);
     await expectAck(this.connection, `UPD ${reference}`);
+    return new EdpEditor(this.connection, tid);
+  }
+
+  /**
+   * Oeffnet ein Infosystem im Hintergrund und liefert es als Editoraktion.
+   *
+   * Ablauf danach: Auswahlfelder mit setField() fuellen, den Startbutton
+   * mit click("bstart") ausloesen, das Ergebnis mit getFields(felder, "*")
+   * lesen und die Aktion mit cancel() schliessen. Ein Infosystem wird
+   * nicht gespeichert - COM waere hier falsch.
+   *
+   * Geoeffnet wird ueber das Tippkommando "Infosystem"
+   * (EDI|TID|DO|Infosystem||<Suchwort>|), so wie es auch das mitgelieferte
+   * edpinfosys.sh mit seiner Option -n tut. Fuehrt der Mandant dasselbe
+   * Suchwort in mehreren Arbeitsbereichen, den Bereich mit angeben -
+   * daraus wird "<Suchwort> <Arbeitsbereich>".
+   *
+   * Achtung: "Infosystem" ist das Tippkommando in der Bediensprache. In
+   * einem anderssprachigen Mandanten heisst es anders; dann ueber
+   * `typedCommand` den passenden Text setzen.
+   */
+  async openInfosystem(
+    searchword: string,
+    options: { workingDir?: string; typedCommand?: string } = {}
+  ): Promise<EdpEditor> {
+    const argument = options.workingDir ? `${searchword} ${options.workingDir}` : searchword;
+    const tid = this.connection.takeTid();
+    // EDI|TID|Aktion|Tippkommando||Kommando-Argumente|
+    // Das leere Feld zwischen Tippkommando und Argumenten gehoert dazu -
+    // ohne es antwortet der Server "Infosystem : kein Suchwort angegeben".
+    this.connection.send("EDI", tid, ["DO", options.typedCommand ?? "Infosystem", "", argument]);
+    await expectAck(this.connection, `Infosystem ${argument}`);
     return new EdpEditor(this.connection, tid);
   }
 

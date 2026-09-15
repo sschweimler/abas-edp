@@ -17,6 +17,20 @@ export interface ConnectionOptions {
    * werden.
    */
   logger?: (direction: LogDirection, text: string) => void;
+  /**
+   * Umschliessende Leerzeichen aus gelesenen Feldwerten entfernen.
+   * Vorgabe: true.
+   *
+   * abas liefert Verweise in der Externdarstellung auf Feldbreite
+   * aufgefuellt, etwa "        1479" statt "1479". Das ist eine
+   * Darstellungsbreite, kein Inhalt - unbehandelt scheitert aber jeder
+   * Vergleich und jede Weiterverarbeitung daran.
+   *
+   * Anders als NUMMODE & Co. ist das KEINE Servereinstellung, sondern
+   * eine Normalisierung dieses Pakets. Wer die Rohwerte braucht, setzt
+   * die Option auf false.
+   */
+  trimValues?: boolean;
 }
 
 interface Waiting {
@@ -44,6 +58,12 @@ export class EdpConnection {
 
   get isClosed(): boolean {
     return this.closed;
+  }
+
+  /** Normalisiert einen gelesenen Feldwert (siehe ConnectionOptions.trimValues). */
+  normalize(value: string | undefined): string {
+    const text = value ?? "";
+    return this.options.trimValues === false ? text : text.trim();
   }
 
   /** Vergibt die naechste Aktions-ID. */

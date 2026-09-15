@@ -35,7 +35,7 @@ test("meldet sich an und liest eine Datenmenge", async () => {
     assert.deepEqual(ergebnis.rows[1], ["Artikel", "Bez mit | und \n und \\", "2:1"]);
 
     // Ueber drei Saetze verteilte Zeile ist wieder eine Zeile
-    assert.deepEqual(ergebnis.rows[2], ["Lieferant", "Anfang-Mitte-Ende", "1:1"]);
+    assert.deepEqual(ergebnis.rows[2], ["Lieferant", "Anfang Mitte Ende", "1:1"]);
 
     await session.close();
   });

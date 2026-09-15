@@ -63,6 +63,63 @@ export class EdpEditor {
     await this.expectAck(`SFV ${field}`);
   }
 
+  /**
+   * Betaetigt einen Button.
+   *
+   * Buttons sind in abas gewoehnliche Felder; geklickt wird, indem man
+   * sie setzt. Das mitgelieferte Werkzeug edpinfosys.sh macht es genauso
+   * ("Für Buttons müssen keine Feldwerte angegeben werden") und nimmt
+   * ohne Angabe den Startbutton "bstart" an.
+   *
+   * Nicht fuer Submaskenbuttons der Arten BU8/BU10/BU12 - die lassen sich
+   * nicht klicken, dafuer gibt es das Kommando SUB.
+   */
+  async click(button: string, row: RowSpec = 0): Promise<void> {
+    await this.setField(button, "", row);
+  }
+
+  /**
+   * Liest Feldwerte (GFV).
+   *
+   * Ohne Zeilenangabe kommen die Felder des Kopfteils, mit "*" alle
+   * Zeilen des Tabellenteils; moeglich sind ausserdem Zeilennummern,
+   * Bereiche wie "1-5", Listen wie "1;#" und $-Selektionen.
+   *
+   * Der Server antwortet je FELD mit einer Zeile - nicht je Datensatz:
+   * "D|TID|Zeile|Feldname|aktueller Wert|urspruenglicher Wert|...".
+   * Hier werden sie nach Zeilennummer gruppiert, sodass pro Tabellenzeile
+   * ein Objekt entsteht.
+   */
+  async getFields(fields?: string[], row?: RowSpec): Promise<Record<string, string>[]> {
+    this.ensureOpen();
+    this.connection.send("GFV", this.tid, [
+      row === undefined ? "" : String(row),
+      fields?.join(",") ?? "",
+    ]);
+
+    const zeilen = new Map<string, Record<string, string>>();
+    const messages: string[] = [];
+    for (;;) {
+      const record = await this.connection.read("GFV-Antwort");
+      if (record.command === "D") {
+        const [zeile, feld, wert] = record.fields;
+        const schluessel = zeile ?? "";
+        let ziel = zeilen.get(schluessel);
+        if (!ziel) {
+          ziel = {};
+          zeilen.set(schluessel, ziel);
+        }
+        if (feld) ziel[feld] = this.connection.normalize(wert);
+      } else if (record.command === "EOD") {
+        return [...zeilen.values()];
+      } else if (record.command === "NAK") {
+        throw new EdpError("GFV", record, messages);
+      } else if (record.command === "E") {
+        messages.push(record.fields[0] ?? "");
+      }
+    }
+  }
+
   /** Fuegt eine leere Zeile ein (RIN). Ohne Angabe am Ende der Tabelle. */
   async insertRow(position?: RowSpec): Promise<void> {
     this.ensureOpen();
