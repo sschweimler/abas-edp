@@ -21,7 +21,7 @@ export {
   type Dataset,
 } from "./session";
 export { EdpConnection, type ConnectionOptions, type LogDirection } from "./connection";
-export { EdpEditor, type RowSpec } from "./editor";
+export { EdpEditor, type RowSpec, type FieldRow } from "./editor";
 export { EdpClient, type ClientOptions } from "./client";
 export { EdpError, EdpTimeoutError, EdpConnectionClosedError } from "./errors";
 export {

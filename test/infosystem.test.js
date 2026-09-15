@@ -30,8 +30,12 @@ test("oeffnet ein Infosystem, setzt Felder, druckt Start und liest Zeilen", asyn
 
     const zeilen = await is.getFields(["order", "art", "frgmge"], "*");
     assert.equal(zeilen.length, 2);
-    assert.deepEqual(zeilen[0], { order: "1479", art: "100481", frgmge: "10" });
-    assert.deepEqual(zeilen[1], { order: "1479001", art: "A 00015", frgmge: "9" });
+    // Die Zeilennummer kommt mit - ohne sie liesse sich ein gelesener
+    // Wert spaeter nicht zurueckschreiben.
+    assert.equal(zeilen[0].row, "1");
+    assert.deepEqual(zeilen[0].fields, { order: "1479", art: "100481", frgmge: "10" });
+    assert.equal(zeilen[1].row, "2");
+    assert.deepEqual(zeilen[1].fields, { order: "1479001", art: "A 00015", frgmge: "9" });
 
     await is.cancel();
   });
@@ -43,7 +47,7 @@ test("entfernt die Auffuellung der Externdarstellung", async () => {
   await mitSession(async (session) => {
     const is = await session.openInfosystem("PRODLIST");
     const zeilen = await is.getFields(["order"], "*");
-    assert.equal(zeilen[0].order, "1479");
+    assert.equal(zeilen[0].fields.order, "1479");
     await is.cancel();
   });
 });
@@ -53,7 +57,7 @@ test("mit trimValues:false bleiben die Rohwerte erhalten", async () => {
     async (session) => {
       const is = await session.openInfosystem("PRODLIST");
       const zeilen = await is.getFields(["order"], "*");
-      assert.match(zeilen[0].order, /^\s+1479$/);
+      assert.match(zeilen[0].fields.order, /^\s+1479$/);
       await is.cancel();
     },
     { trimValues: false }
@@ -65,7 +69,7 @@ test("Kopffelder ohne Zeilenangabe", async () => {
     const is = await session.openInfosystem("PRODLIST");
     const kopf = await is.getFields(["kba"]);
     assert.equal(kopf.length, 1);
-    assert.equal(kopf[0].kba, "");
+    assert.equal(kopf[0].fields.kba, "");
     await is.cancel();
   });
 });

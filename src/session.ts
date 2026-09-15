@@ -444,6 +444,30 @@ export class EdpSession {
   }
 
   /**
+   * Oeffnet einen Datensatz nur zur Anzeige (VIE).
+   *
+   * Der Weg, um einen Satz samt **allen Tabellenzeilen** zu lesen: eine
+   * Selektion (EXQ) liefert je Satz eine Zeile und damit aus dem
+   * Tabellenteil nur den ersten Wert. Erst im geoeffneten Objekt liefert
+   * getFields(felder, "*") alle Zeilen.
+   *
+   * Im Unterschied zu editRecord() wird der Satz dabei nicht zur
+   * Bearbeitung belegt - fuer reines Lesen also das richtige Kommando.
+   * Beendet wird mit cancel().
+   */
+  viewRecord(
+    reference: string,
+    options: { table?: string; by?: "REF" | "NUMSW" } = {}
+  ): Promise<EdpEditor> {
+    const tid = this.connection.takeTid();
+    return this.connection.exclusive(async () => {
+      this.connection.send("VIE", tid, [options.table ?? "", options.by ?? "REF", reference]);
+      await expectAck(this.connection, `VIE ${reference}`);
+      return new EdpEditor(this.connection, tid);
+    });
+  }
+
+  /**
    * Fuehrt eine Editoraktion aus und raeumt sie zuverlaessig ab: Bei
    * Erfolg wird gespeichert, bei einem Fehler abgebrochen.
    *

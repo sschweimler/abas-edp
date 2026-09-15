@@ -15,6 +15,18 @@ import { EdpError } from "./errors";
 export type RowSpec = number | string;
 
 /**
+ * Eine von GFV gelieferte Zeile.
+ *
+ * Die Zeilennummer wird mitgegeben, weil sie kein Beiwerk ist: Ohne sie
+ * laesst sich ein gelesener Wert spaeter nicht wieder zurueckschreiben.
+ * Fuer Kopffelder ist sie "0".
+ */
+export interface FieldRow {
+  row: string;
+  fields: Record<string, string>;
+}
+
+/**
  * Eine offene Editoraktion - auch ein geoeffnetes Infosystem ist eine.
  *
  * Wichtig: Die Aktion traegt eine eigene Aktions-ID, die bei allen
@@ -126,7 +138,7 @@ export class EdpEditor {
    * ein Objekt entsteht. Die uebrigen Angaben je Feld (aenderbar,
    * Pflichtfeld, Art, Laenge) werden derzeit verworfen.
    */
-  getFields(fields?: string[], row?: RowSpec): Promise<Record<string, string>[]> {
+  getFields(fields?: string[], row?: RowSpec): Promise<FieldRow[]> {
     return this.connection.exclusive(async () => {
       this.ensureOpen();
       this.connection.send("GFV", this.tid, [
@@ -134,7 +146,7 @@ export class EdpEditor {
         fields?.join(",") ?? "",
       ]);
 
-      const zeilen = new Map<string, Record<string, string>>();
+      const zeilen = new Map<string, FieldRow>();
       const messages: string[] = [];
       for (;;) {
         const record = await this.connection.read("GFV-Antwort");
@@ -143,10 +155,10 @@ export class EdpEditor {
           const schluessel = zeile ?? "";
           let ziel = zeilen.get(schluessel);
           if (!ziel) {
-            ziel = {};
+            ziel = { row: schluessel, fields: {} };
             zeilen.set(schluessel, ziel);
           }
-          if (feld) ziel[feld] = this.connection.normalize(wert);
+          if (feld) ziel.fields[feld] = this.connection.normalize(wert);
         } else if (record.command === "EOD") {
           return [...zeilen.values()];
         } else if (record.command === "NAK") {
