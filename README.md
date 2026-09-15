@@ -98,11 +98,18 @@ npm test          # baut und prüft gegen einen Mock-Server, kein ERP nötig
 ABAS_PASSWORD=... npm run smoke -- --host abas-server --client entw
 ```
 
-Unter `test/` liegen ausschließlich Dateien mit der Endung `.test.js`.
-Hilfsprogramme — der Mock-Server und der Rauchtest gegen ein echtes
-System — stehen bewusst in `scripts/`: Node betrachtet ab Version 20
-**jede** `.js`-Datei unterhalb von `test/` als Testdatei und würde sie
-sonst mitlaufen lassen.
+Zwei Eigenheiten des eingebauten Test-Runners, die beide schon einmal
+einen CI-Lauf gekostet haben:
+
+- `node --test` wird **ohne Pfadangabe** aufgerufen. Ein Verzeichnis als
+  Argument durchsucht Node bis Version 20, ab Version 22 versucht es
+  stattdessen, den Pfad als Modul zu laden — und scheitert.
+- Unter `test/` liegen ausschließlich Dateien mit der Endung `.test.js`.
+  Hilfsprogramme — der Mock-Server und der Rauchtest gegen ein echtes
+  System — stehen in `scripts/`, weil Node ab Version 20 **jede**
+  `.js`-Datei unterhalb von `test/` als Testdatei betrachtet.
+
+Die CI prüft deshalb gegen Node 18, 20 und 22.
 
 Veröffentlicht wird über einen Versions-Tag:
 

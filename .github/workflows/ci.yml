@@ -15,10 +15,12 @@ jobs:
       fail-fast: false
       matrix:
         # Mehrere Versionen, weil sich der eingebaute Test-Runner zwischen
-        # den Hauptversionen unterschiedlich verhaelt - Node 20 betrachtet
-        # jede .js-Datei unterhalb von test/ als Testdatei, Node 18 nur
-        # solche mit *.test.js. Genau daran ist der erste CI-Lauf
-        # gescheitert, waehrend lokal alles gruen war.
+        # den Hauptversionen unterschiedlich verhaelt - und zwar in beide
+        # Richtungen: Node 20 betrachtet jede .js-Datei unterhalb von
+        # test/ als Testdatei (Node 18 nur *.test.js), und Node 22 laedt
+        # ein Verzeichnisargument als Modul statt es zu durchsuchen. An
+        # beidem ist je ein CI-Lauf gescheitert, waehrend lokal alles
+        # gruen war.
         node: ["18", "20", "22"]
     name: Tests (Node ${{ matrix.node }})
     steps:
