@@ -185,49 +185,40 @@ export class EdpSession {
     }
   }
 
+  /** Ist die zugrundeliegende Verbindung bereits geschlossen? */
+  get isClosed(): boolean {
+    return this.connection.isClosed;
+  }
+
   /** Setzt eine Darstellungsoption (SET), z. B. VERWMODE auf "SW". */
   async setOption(name: string, value: string): Promise<void> {
     await this.command("SET", [name, value]);
   }
 
-  /**
-   * Fuehrt ein Kommando aus, das mit ACK oder NAK beantwortet wird.
-   * Liefert den ACK-Satz.
-   */
-  async command(command: string, fields: unknown[] = []): Promise<EdpRecord> {
+  // --- interne Varianten ohne Ausschluss ---------------------------------
+  // Werden von Methoden aufgerufen, die den Ausschluss bereits halten.
+
+  private async commandRaw(command: string, fields: unknown[]): Promise<EdpRecord> {
     const tid = this.connection.takeTid();
     this.connection.send(command, tid, fields);
     return expectAck(this.connection, command);
   }
 
-  /**
-   * Fuehrt ein Kommando aus, das mit einer Datenmenge beantwortet wird
-   * (BOD, beliebig viele D/DC, EOD).
-   */
-  async query(command: string, fields: unknown[] = []): Promise<Dataset> {
+  private async queryRaw(command: string, fields: unknown[]): Promise<Dataset> {
     const tid = this.connection.takeTid();
     this.connection.send(command, tid, fields);
     this.lastQueryTid = tid;
     return this.readDataset(command);
   }
 
-  /**
-   * Fuehrt eine Selektion aus (EXQ).
-   *
-   * Der Selektstring wird in der klassischen Form "Tabelle,Kriterien"
-   * zusammengesetzt. Ab EDP 3.55 koennte die Tabelle auch im letzten Feld
-   * stehen - die klassische Form funktioniert aber auch mit aelteren
-   * Servern, und der Unterschied ist sonst keiner.
-   */
-  async select(options: SelectOptions): Promise<Dataset> {
+  private async selectRaw(options: SelectOptions): Promise<Dataset> {
     const selectString = options.criteria
       ? `${options.table},${options.criteria}`
       : options.table;
-    const fieldList = options.fields?.join(",") ?? "";
 
-    const dataset = await this.query("EXQ", [
+    const dataset = await this.queryRaw("EXQ", [
       selectString,
-      fieldList,
+      options.fields?.join(",") ?? "",
       options.pageSize ?? "",
       options.offset ?? "",
       "", // Edit-TID, nur bei feldbezogener Selektion
@@ -243,14 +234,7 @@ export class EdpSession {
     return withFields(dataset, options.fields);
   }
 
-  /**
-   * Holt die naechste Teilmenge einer Abfrage (GNR).
-   *
-   * Ohne Aktions-ID setzt der Server die zuletzt benutzte Abfrage fort;
-   * hier wird sie trotzdem mitgegeben, damit das Verhalten auch dann
-   * eindeutig bleibt, wenn zwischendurch andere Kommandos liefen.
-   */
-  async next(): Promise<Dataset> {
+  private async nextRaw(): Promise<Dataset> {
     if (this.lastQueryTid === null) {
       throw new Error("Kein Weiterlesen moeglich - es wurde noch keine Abfrage ausgefuehrt");
     }
@@ -259,22 +243,69 @@ export class EdpSession {
     return withFields(dataset, this.lastFields);
   }
 
+  // --- oeffentliche Schnittstelle ----------------------------------------
+
+  /**
+   * Fuehrt ein Kommando aus, das mit ACK oder NAK beantwortet wird.
+   * Liefert den ACK-Satz.
+   */
+  command(command: string, fields: unknown[] = []): Promise<EdpRecord> {
+    return this.connection.exclusive(() => this.commandRaw(command, fields));
+  }
+
+  /**
+   * Fuehrt ein Kommando aus, das mit einer Datenmenge beantwortet wird
+   * (BOD, beliebig viele D/DC, EOD).
+   */
+  query(command: string, fields: unknown[] = []): Promise<Dataset> {
+    return this.connection.exclusive(() => this.queryRaw(command, fields));
+  }
+
+  /**
+   * Fuehrt eine Selektion aus (EXQ).
+   *
+   * Der Selektstring wird in der klassischen Form "Tabelle,Kriterien"
+   * zusammengesetzt. Ab EDP 3.55 koennte die Tabelle auch im letzten Feld
+   * stehen - die klassische Form funktioniert aber auch mit aelteren
+   * Servern, und der Unterschied ist sonst keiner.
+   */
+  select(options: SelectOptions): Promise<Dataset> {
+    return this.connection.exclusive(() => this.selectRaw(options));
+  }
+
+  /**
+   * Holt die naechste Teilmenge einer Abfrage (GNR).
+   *
+   * Ohne Aktions-ID setzt der Server die zuletzt benutzte Abfrage fort;
+   * hier wird sie trotzdem mitgegeben, damit das Verhalten auch dann
+   * eindeutig bleibt, wenn zwischendurch andere Kommandos liefen.
+   */
+  next(): Promise<Dataset> {
+    return this.connection.exclusive(() => this.nextRaw());
+  }
+
   /**
    * Selektiert und liefert alle Saetze, ueber beliebig viele Teilmengen
    * hinweg. Nur verwenden, wenn das Ergebnis in den Speicher passt -
    * sonst select()/next() von Hand paginieren.
+   *
+   * Laeuft als EIN exklusiver Vorgang: GNR setzt serverseitig die zuletzt
+   * benutzte Abfrage fort, also darf zwischen EXQ und den GNR-Aufrufen
+   * keine andere Abfrage dazwischenkommen.
    */
-  async selectAll(options: SelectOptions): Promise<Dataset> {
-    const first = await this.select(options);
-    const rows = [...first.rows];
-    let page = first;
+  selectAll(options: SelectOptions): Promise<Dataset> {
+    return this.connection.exclusive(async () => {
+      const first = await this.selectRaw(options);
+      const rows = [...first.rows];
+      let page = first;
 
-    while (page.hasMore) {
-      page = await this.next();
-      rows.push(...page.rows);
-    }
+      while (page.hasMore) {
+        page = await this.nextRaw();
+        rows.push(...page.rows);
+      }
 
-    return withFields({ ...first, rows, hasMore: false }, options.fields);
+      return withFields({ ...first, rows, hasMore: false }, options.fields);
+    });
   }
 
   private async readDataset(action: string): Promise<Dataset> {
@@ -352,9 +383,11 @@ export class EdpSession {
     // scheitert. Das in der Doku zum Kommando EDI erwaehnte "EMPTY" gilt
     // fuer EDI, nicht fuer NEW - dort quittiert der Server es mit
     // "EMPTY: nicht gefunden".
-    this.connection.send("NEW", tid, [table]);
-    await expectAck(this.connection, `NEW ${table}`);
-    return new EdpEditor(this.connection, tid);
+    return this.connection.exclusive(async () => {
+      this.connection.send("NEW", tid, [table]);
+      await expectAck(this.connection, `NEW ${table}`);
+      return new EdpEditor(this.connection, tid);
+    });
   }
 
   /**
@@ -369,9 +402,11 @@ export class EdpSession {
     options: { table?: string; by?: "REF" | "NUMSW" } = {}
   ): Promise<EdpEditor> {
     const tid = this.connection.takeTid();
-    this.connection.send("UPD", tid, [options.table ?? "", options.by ?? "REF", reference]);
-    await expectAck(this.connection, `UPD ${reference}`);
-    return new EdpEditor(this.connection, tid);
+    return this.connection.exclusive(async () => {
+      this.connection.send("UPD", tid, [options.table ?? "", options.by ?? "REF", reference]);
+      await expectAck(this.connection, `UPD ${reference}`);
+      return new EdpEditor(this.connection, tid);
+    });
   }
 
   /**
@@ -401,9 +436,11 @@ export class EdpSession {
     // EDI|TID|Aktion|Tippkommando||Kommando-Argumente|
     // Das leere Feld zwischen Tippkommando und Argumenten gehoert dazu -
     // ohne es antwortet der Server "Infosystem : kein Suchwort angegeben".
-    this.connection.send("EDI", tid, ["DO", options.typedCommand ?? "Infosystem", "", argument]);
-    await expectAck(this.connection, `Infosystem ${argument}`);
-    return new EdpEditor(this.connection, tid);
+    return this.connection.exclusive(async () => {
+      this.connection.send("EDI", tid, ["DO", options.typedCommand ?? "Infosystem", "", argument]);
+      await expectAck(this.connection, `Infosystem ${argument}`);
+      return new EdpEditor(this.connection, tid);
+    });
   }
 
   /**

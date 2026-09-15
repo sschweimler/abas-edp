@@ -1,4 +1,5 @@
 import net from "node:net";
+import { Mutex } from "./mutex";
 import { buildRecord, parseRecord, MAX_RECORD_BYTES, type EdpRecord } from "./record";
 import { EdpConnectionClosedError, EdpTimeoutError } from "./errors";
 
@@ -40,6 +41,16 @@ interface Waiting {
 }
 
 /**
+ * Ein Vorgang, der die Verbindung exklusiv braucht.
+ *
+ * Eine EDP-Sitzung hat genau einen Antwortstrom. Ein Vorgang besteht aber
+ * aus Senden UND Lesen bis zum Abschlusssatz - laufen zwei davon
+ * ineinander, bekommt der falsche Aufrufer die Antwort. Deshalb umschliesst
+ * jeder oeffentliche Aufruf seinen Vorgang mit exclusive().
+ */
+export type Operation<T> = () => Promise<T>;
+
+/**
  * Rohe EDP-Verbindung: TCP, Satzgrenzen, Zeichenkodierung, Aktions-IDs.
  *
  * Kennt bewusst keine Kommandos - was LGN oder GTN bedeuten, weiss erst
@@ -50,11 +61,27 @@ export class EdpConnection {
   private socket: net.Socket | null = null;
   private buffer: Buffer = Buffer.alloc(0);
   private queue: EdpRecord[] = [];
-  private waiting: Waiting | null = null;
+  /**
+   * Wartende Leser, in Reihenfolge. Frueher stand hier ein einzelner
+   * Platz - ein zweiter Leser hat den ersten ueberschrieben, dessen
+   * Versprechen nie erfuellt wurde und der ins Zeitlimit lief, waehrend
+   * seine Antwort beim Falschen landete.
+   */
+  private waiting: Waiting[] = [];
   private closed = false;
   private nextTid = 1;
+  private readonly mutex = new Mutex();
 
   constructor(private readonly options: ConnectionOptions) {}
+
+  /**
+   * Fuehrt einen vollstaendigen Vorgang (senden und lesen bis zum
+   * Abschlusssatz) exklusiv aus. Gleichzeitige Aufrufe werden
+   * nacheinander abgearbeitet, nicht vermischt.
+   */
+  exclusive<T>(operation: Operation<T>): Promise<T> {
+    return this.mutex.runExclusive(operation);
+  }
 
   get isClosed(): boolean {
     return this.closed;
@@ -98,11 +125,12 @@ export class EdpConnection {
   }
 
   private failWaiting(error: Error): void {
-    const waiting = this.waiting;
-    if (!waiting) return;
-    this.waiting = null;
-    clearTimeout(waiting.timer);
-    waiting.reject(error);
+    const wartende = this.waiting;
+    this.waiting = [];
+    for (const w of wartende) {
+      clearTimeout(w.timer);
+      w.reject(error);
+    }
   }
 
   /**
@@ -125,9 +153,8 @@ export class EdpConnection {
       const line = rawLine.toString("latin1");
       this.log("receive", line);
       const record = parseRecord(line);
-      const waiting = this.waiting;
+      const waiting = this.waiting.shift();
       if (waiting) {
-        this.waiting = null;
         clearTimeout(waiting.timer);
         waiting.resolve(record);
       } else {
@@ -163,11 +190,16 @@ export class EdpConnection {
     if (queued) return Promise.resolve(queued);
     if (this.closed) return Promise.reject(new EdpConnectionClosedError());
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.waiting = null;
-        reject(new EdpTimeoutError(timeoutMs, waitingFor));
-      }, timeoutMs);
-      this.waiting = { resolve, reject, timer };
+      const eintrag: Waiting = {
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          const index = this.waiting.indexOf(eintrag);
+          if (index !== -1) this.waiting.splice(index, 1);
+          reject(new EdpTimeoutError(timeoutMs, waitingFor));
+        }, timeoutMs),
+      };
+      this.waiting.push(eintrag);
     });
   }
 

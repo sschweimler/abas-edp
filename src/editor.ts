@@ -8,13 +8,14 @@ import { EdpError } from "./errors";
  * - Zahl: Zeilennummer, aendert sich durch Einfuegen/Loeschen
  * - "(1234,2,0,5)": Zeilenreferenz, aendert sich nicht
  * - ".": zuletzt angesprochene Zeile
- * - "#": vor die letzte Zeile
+ * - "#": letzte Zeile
+ * - "*": alle Zeilen (nur beim Lesen)
  * - weggelassen oder 0: Kopfteil
  */
 export type RowSpec = number | string;
 
 /**
- * Eine offene Editoraktion.
+ * Eine offene Editoraktion - auch ein geoeffnetes Infosystem ist eine.
  *
  * Wichtig: Die Aktion traegt eine eigene Aktions-ID, die bei allen
  * folgenden Schritten anzugeben ist, und sie bleibt offen, bis sie mit
@@ -22,6 +23,11 @@ export type RowSpec = number | string;
  * Exklusiveditor laesst in derselben Sitzung keinen zweiten zu - eine
  * vergessene Aktion blockiert also alles Weitere. Deshalb sollte man
  * EdpSession.edit() verwenden, das beides zuverlaessig abraeumt.
+ *
+ * Jede oeffentliche Methode belegt die Verbindung exklusiv, solange sie
+ * sendet und auf ihre Antwort wartet. Die internen ...Raw-Varianten tun
+ * das nicht - sie werden von Methoden aufgerufen, die den Ausschluss
+ * bereits halten.
  */
 export class EdpEditor {
   private finished = false;
@@ -30,6 +36,10 @@ export class EdpEditor {
     private readonly connection: EdpConnection,
     readonly tid: number
   ) {}
+
+  get isFinished(): boolean {
+    return this.finished;
+  }
 
   private ensureOpen(): void {
     if (this.finished) {
@@ -47,6 +57,35 @@ export class EdpEditor {
     }
   }
 
+  // --- interne Varianten ohne Ausschluss ---------------------------------
+
+  private async setFieldRaw(field: string, value: unknown, row: RowSpec): Promise<void> {
+    this.ensureOpen();
+    this.connection.send("SFV", this.tid, [String(row), field, value]);
+    await this.expectAck(`SFV ${field}`);
+  }
+
+  private async statusRaw(): Promise<Record<string, string>> {
+    this.connection.send("GTS", this.tid, []);
+    const werte: Record<string, string> = {};
+    const messages: string[] = [];
+    for (;;) {
+      const record = await this.connection.read("GTS-Antwort");
+      if (record.command === "D") {
+        const [name, wert] = record.fields;
+        if (name) werte[name] = this.connection.normalize(wert);
+      } else if (record.command === "EOD") {
+        return werte;
+      } else if (record.command === "NAK") {
+        throw new EdpError("GTS", record, messages);
+      } else if (record.command === "E") {
+        messages.push(record.fields[0] ?? "");
+      }
+    }
+  }
+
+  // --- oeffentliche Schnittstelle ----------------------------------------
+
   /**
    * Setzt einen Feldwert (SFV). Ohne Zeilenangabe bzw. mit 0 wird ein Feld
    * im Kopfteil gesetzt.
@@ -54,28 +93,24 @@ export class EdpEditor {
    * Zahlen werden hier NICHT umformatiert. Welche Schreibweise der Server
    * erwartet, haengt an den Darstellungsoptionen der Sitzung: Mit dem
    * voreingestellten NUMMODE=RAW ist es der Dezimalpunkt, unter der
-   * abas-Vorgabe waere es das Komma der Bediensprache. Wer die Optionen
-   * nicht umstellt, muss seine Werte also selbst passend formatieren.
+   * abas-Vorgabe waere es das Komma der Bediensprache.
    */
-  async setField(field: string, value: unknown, row: RowSpec = 0): Promise<void> {
-    this.ensureOpen();
-    this.connection.send("SFV", this.tid, [String(row), field, value]);
-    await this.expectAck(`SFV ${field}`);
+  setField(field: string, value: unknown, row: RowSpec = 0): Promise<void> {
+    return this.connection.exclusive(() => this.setFieldRaw(field, value, row));
   }
 
   /**
    * Betaetigt einen Button.
    *
    * Buttons sind in abas gewoehnliche Felder; geklickt wird, indem man
-   * sie setzt. Das mitgelieferte Werkzeug edpinfosys.sh macht es genauso
-   * ("Für Buttons müssen keine Feldwerte angegeben werden") und nimmt
-   * ohne Angabe den Startbutton "bstart" an.
+   * sie setzt. Das mitgelieferte edpinfosys.sh macht es genauso ("Für
+   * Buttons müssen keine Feldwerte angegeben werden").
    *
    * Nicht fuer Submaskenbuttons der Arten BU8/BU10/BU12 - die lassen sich
    * nicht klicken, dafuer gibt es das Kommando SUB.
    */
-  async click(button: string, row: RowSpec = 0): Promise<void> {
-    await this.setField(button, "", row);
+  click(button: string, row: RowSpec = 0): Promise<void> {
+    return this.connection.exclusive(() => this.setFieldRaw(button, "", row));
   }
 
   /**
@@ -88,50 +123,57 @@ export class EdpEditor {
    * Der Server antwortet je FELD mit einer Zeile - nicht je Datensatz:
    * "D|TID|Zeile|Feldname|aktueller Wert|urspruenglicher Wert|...".
    * Hier werden sie nach Zeilennummer gruppiert, sodass pro Tabellenzeile
-   * ein Objekt entsteht.
+   * ein Objekt entsteht. Die uebrigen Angaben je Feld (aenderbar,
+   * Pflichtfeld, Art, Laenge) werden derzeit verworfen.
    */
-  async getFields(fields?: string[], row?: RowSpec): Promise<Record<string, string>[]> {
-    this.ensureOpen();
-    this.connection.send("GFV", this.tid, [
-      row === undefined ? "" : String(row),
-      fields?.join(",") ?? "",
-    ]);
+  getFields(fields?: string[], row?: RowSpec): Promise<Record<string, string>[]> {
+    return this.connection.exclusive(async () => {
+      this.ensureOpen();
+      this.connection.send("GFV", this.tid, [
+        row === undefined ? "" : String(row),
+        fields?.join(",") ?? "",
+      ]);
 
-    const zeilen = new Map<string, Record<string, string>>();
-    const messages: string[] = [];
-    for (;;) {
-      const record = await this.connection.read("GFV-Antwort");
-      if (record.command === "D") {
-        const [zeile, feld, wert] = record.fields;
-        const schluessel = zeile ?? "";
-        let ziel = zeilen.get(schluessel);
-        if (!ziel) {
-          ziel = {};
-          zeilen.set(schluessel, ziel);
+      const zeilen = new Map<string, Record<string, string>>();
+      const messages: string[] = [];
+      for (;;) {
+        const record = await this.connection.read("GFV-Antwort");
+        if (record.command === "D") {
+          const [zeile, feld, wert] = record.fields;
+          const schluessel = zeile ?? "";
+          let ziel = zeilen.get(schluessel);
+          if (!ziel) {
+            ziel = {};
+            zeilen.set(schluessel, ziel);
+          }
+          if (feld) ziel[feld] = this.connection.normalize(wert);
+        } else if (record.command === "EOD") {
+          return [...zeilen.values()];
+        } else if (record.command === "NAK") {
+          throw new EdpError("GFV", record, messages);
+        } else if (record.command === "E") {
+          messages.push(record.fields[0] ?? "");
         }
-        if (feld) ziel[feld] = this.connection.normalize(wert);
-      } else if (record.command === "EOD") {
-        return [...zeilen.values()];
-      } else if (record.command === "NAK") {
-        throw new EdpError("GFV", record, messages);
-      } else if (record.command === "E") {
-        messages.push(record.fields[0] ?? "");
       }
-    }
+    });
   }
 
   /** Fuegt eine leere Zeile ein (RIN). Ohne Angabe am Ende der Tabelle. */
-  async insertRow(position?: RowSpec): Promise<void> {
-    this.ensureOpen();
-    this.connection.send("RIN", this.tid, position === undefined ? [] : [String(position)]);
-    await this.expectAck("RIN");
+  insertRow(position?: RowSpec): Promise<void> {
+    return this.connection.exclusive(async () => {
+      this.ensureOpen();
+      this.connection.send("RIN", this.tid, position === undefined ? [] : [String(position)]);
+      await this.expectAck("RIN");
+    });
   }
 
   /** Loescht eine Zeile (RDL). */
-  async deleteRow(position: RowSpec): Promise<void> {
-    this.ensureOpen();
-    this.connection.send("RDL", this.tid, [String(position)]);
-    await this.expectAck("RDL");
+  deleteRow(position: RowSpec): Promise<void> {
+    return this.connection.exclusive(async () => {
+      this.ensureOpen();
+      this.connection.send("RDL", this.tid, [String(position)]);
+      await this.expectAck("RDL");
+    });
   }
 
   /**
@@ -139,26 +181,11 @@ export class EdpEditor {
    * z. B. NUMROWS, REF, NUM, ACTION oder MODIFIED.
    *
    * Achtung, am echten System gelernt: GTS antwortet NICHT mit ACK,
-   * sondern mit einer Datenmenge - je Eigenschaft eine D-Zeile der Form
-   * "D|TID|EIGENSCHAFT|WERT|". Wer hier auf ein ACK wartet, wartet
-   * endlos; der Server schweigt einfach.
+   * sondern mit einer Datenmenge - je Eigenschaft eine D-Zeile. Wer hier
+   * auf ein ACK wartet, wartet endlos; der Server schweigt einfach.
    */
-  async status(): Promise<Record<string, string>> {
-    this.connection.send("GTS", this.tid, []);
-    const werte: Record<string, string> = {};
-    const messages: string[] = [];
-    for (;;) {
-      const record = await this.connection.read("GTS-Antwort");
-      if (record.command === "D") {
-        werte[record.fields[0] ?? ""] = record.fields[1] ?? "";
-      } else if (record.command === "EOD") {
-        return werte;
-      } else if (record.command === "NAK") {
-        throw new EdpError("GTS", record, messages);
-      } else if (record.command === "E") {
-        messages.push(record.fields[0] ?? "");
-      }
-    }
+  status(): Promise<Record<string, string>> {
+    return this.connection.exclusive(() => this.statusRaw());
   }
 
   /** Einzelne Eigenschaft aus dem Aktionsstatus. */
@@ -172,44 +199,46 @@ export class EdpEditor {
    * Die ACK-Antwort des COM enthaelt nur "Daten erfolgreich gespeichert" -
    * die Referenz steht dort nicht. Sie kommt aus einem GTS unmittelbar
    * danach: Bei einer Neuanlage liefert GTS vor dem Speichern "(0,0,0)"
-   * und eine leere Identnummer, danach die echten Werte, etwa
-   * "(182,31,0)" und "30". Am echten System nachgemessen.
+   * und eine leere Identnummer, danach die echten Werte. Am echten System
+   * nachgemessen.
+   *
+   * Speichern und Nachlesen laufen in EINEM exklusiven Vorgang, damit
+   * zwischen COM und GTS nichts dazwischenfunkt.
    */
-  async commit(): Promise<{ ref: string; num: string; message: string }> {
-    this.ensureOpen();
-    this.connection.send("COM", this.tid, []);
-    const ack = await this.expectAck("COM");
+  commit(): Promise<{ ref: string; num: string; message: string }> {
+    return this.connection.exclusive(async () => {
+      this.ensureOpen();
+      this.connection.send("COM", this.tid, []);
+      const ack = await this.expectAck("COM");
 
-    // Die Aktion ist gespeichert; ein fehlgeschlagenes GTS darf das nicht
-    // mehr umstossen, deshalb nur der Vollstaendigkeit halber.
-    let ref = "";
-    let num = "";
-    try {
-      const status = await this.status();
-      ref = status.REF ?? "";
-      num = status.NUM ?? "";
-    } catch {
-      // Referenz bleibt leer - der Datensatz ist trotzdem gespeichert.
-    }
+      let ref = "";
+      let num = "";
+      try {
+        const status = await this.statusRaw();
+        ref = status.REF ?? "";
+        num = status.NUM ?? "";
+      } catch {
+        // Der Datensatz ist gespeichert; ein fehlgeschlagenes Nachlesen
+        // darf das nicht mehr umstossen.
+      }
 
-    this.finished = true;
-    return { ref, num, message: ack.fields[0] ?? "" };
+      this.finished = true;
+      return { ref, num, message: ack.fields[0] ?? "" };
+    });
   }
 
   /** Verwirft die Aktion (CAN). Mehrfaches Aufrufen ist unschaedlich. */
-  async cancel(): Promise<void> {
-    if (this.finished) return;
+  cancel(): Promise<void> {
+    if (this.finished) return Promise.resolve();
     this.finished = true;
-    this.connection.send("CAN", this.tid, []);
-    try {
-      await this.expectAck("CAN");
-    } catch {
-      // Ein Abbruch, der selbst scheitert, darf den urspruenglichen
-      // Fehler nicht verdecken.
-    }
-  }
-
-  get isFinished(): boolean {
-    return this.finished;
+    return this.connection.exclusive(async () => {
+      this.connection.send("CAN", this.tid, []);
+      try {
+        await this.expectAck("CAN");
+      } catch {
+        // Ein Abbruch, der selbst scheitert, darf den urspruenglichen
+        // Fehler nicht verdecken.
+      }
+    });
   }
 }

@@ -12,8 +12,13 @@ const net = require("node:net");
  */
 function startMockServer(options = {}) {
   const { requireChm = true } = options;
+  /** Zaehlt Anmeldungen - damit laesst sich pruefen, dass nur eine Lizenz belegt wird. */
+  let anmeldungen = 0;
+  const verbindungen = new Set();
 
   const server = net.createServer((socket) => {
+    verbindungen.add(socket);
+    socket.on("close", () => verbindungen.delete(socket));
     let buffer = "";
     let mandant = null;
     let loggedIn = false;
@@ -60,6 +65,7 @@ function startMockServer(options = {}) {
             return;
           }
           loggedIn = true;
+          anmeldungen += 1;
           send(`ACK|${tid}|Logon erfolgreich|`);
           continue;
         }
@@ -264,6 +270,13 @@ function startMockServer(options = {}) {
     server.listen(0, "127.0.0.1", () => {
       resolve({
         port: server.address().port,
+        /** Anzahl erfolgreicher Anmeldungen - eine Anmeldung, eine Lizenz. */
+        loginCount: () => anmeldungen,
+        /** Kappt alle Verbindungen, wie es ein Server nach Leerlauf tun kann. */
+        dropConnections: () => {
+          for (const socket of verbindungen) socket.destroy();
+          verbindungen.clear();
+        },
         close: () => new Promise((done) => server.close(done)),
       });
     });

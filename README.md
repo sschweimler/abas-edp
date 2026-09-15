@@ -25,7 +25,52 @@ offene Verbindung belegt allerdings — wie jeder Zugriff auf abas — eine
 Benutzerlizenz. Sitzungen deshalb schließen, wenn sie nicht gebraucht
 werden.
 
-## Verwendung
+## Verwendung in einem Dienst: `EdpClient`
+
+Für alles, was länger läuft als ein Skript — einen Webserver etwa — ist
+`EdpClient` der richtige Einstieg. Er verwaltet **genau eine** Sitzung:
+
+```ts
+import { EdpClient } from "@sschweimler/abas-edp";
+
+const client = new EdpClient({
+  host: "abas-server",
+  client: "entw",
+  password: process.env.ABAS_PASSWORD!,
+  appName: "meine-anwendung",
+  idleTimeoutMs: 5 * 60 * 1000,   // Vorgabe: 5 Minuten
+});
+
+const plaetze = await client.use((session) =>
+  session.selectAll({ table: "31:1", fields: ["such", "plbez"] })
+);
+```
+
+- **Eine Lizenz, nie mehr.** Jede Anmeldung belegt eine abas-Benutzer­lizenz.
+  Deshalb bewusst kein Verbindungspool, auch wenn abas seine eigene
+  REST-Middleware intern so baut.
+- **Angemeldet wird beim ersten Zugriff**, nicht beim Anlegen des Clients.
+- **Nach Leerlauf wird abgemeldet** und die Lizenz freigegeben; der
+  nächste Zugriff meldet sich neu an (rund eine halbe Sekunde).
+- **Bricht die Verbindung weg**, wird beim nächsten Zugriff neu angemeldet.
+  Der Fehler des betroffenen Aufrufs wird aber durchgereicht und *nicht*
+  stillschweigend wiederholt: Ob ein Schreibvorgang den Server noch
+  erreicht hat, ist von außen nicht erkennbar, und eine Wiederholung
+  könnte doppelt schreiben.
+
+Der Preis dafür ist unvermeidlich und sollte bekannt sein: **Zugriffe
+laufen nacheinander.** Ein unfiltertes PRODLIST braucht rund 13 Sekunden
+— so lange wartet jede andere Anfrage. Wer Durchsatz braucht, gewinnt ihn
+über Zwischenspeichern der Ergebnisse, nicht über weitere Sitzungen.
+
+Gemessen am echten System: drei gleichzeitige Zugriffe, **eine**
+Anmeldung, 995 ms insgesamt; nach dem Leerlauf abgemeldet, der nächste
+Zugriff 573 ms inklusive Neuanmeldung.
+
+## Verwendung ohne Client
+
+Für Skripte und einmalige Läufe genügt `connect()` — dann liegt die
+Verantwortung fürs Abmelden beim Aufrufer.
 
 ```ts
 import { connect } from "@sschweimler/abas-edp";
@@ -222,9 +267,15 @@ Bemerkenswert dabei: Der unfilterte Aufruf, der über die REST-Middleware
 anstandslos durch. Der Hänger ist demnach ein Artefakt der Middleware,
 nicht des Infosystems.
 
+Für den Dauerbetrieb steht `EdpClient` bereit: eine Sitzung, serialisierte
+Zugriffe, Abmeldung nach Leerlauf, Wiederverbinden.
+
 Noch nicht umgesetzt: Transaktionen (`TA`), Sperren (`LCK`),
-Freitextfelder (`SFT`), Dialogbeantwortung (`DLG`), Fortsetzungssätze
-beim Senden.
+Freitextfelder (`SFT`), Dialogbeantwortung (`DLG`), Subeditoren (`SUB`),
+Fortsetzungssätze beim Senden. `GFV` liefert je Feld auch
+Eigenschaften wie *änderbar*, *Pflichtfeld*, *Art* und *Länge* — die
+werden derzeit verworfen und wären für eine generische Maskensteuerung
+nachzurüsten.
 
 Die Wildcard-Syntax für Selektionskriterien ist noch offen: `such=WIP.*`
 und `such=WIP.@` liefern beide nichts, während `pbanr=1497` einwandfrei
