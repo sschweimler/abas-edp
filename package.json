@@ -1,0 +1,38 @@
+{
+  "name": "@sschweimler/abas-edp",
+  "version": "0.1.0",
+  "description": "EDP-Client für abas ERP - spricht das dokumentierte Textprotokoll direkt über TCP, ohne Java und ohne Zusatzabhängigkeiten",
+  "keywords": [
+    "abas",
+    "abas-erp",
+    "edp",
+    "erp"
+  ],
+  "license": "UNLICENSED",
+  "private": false,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/sschweimler/abas-edp.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/",
+    "smoke": "node test/smoke.js"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.11",
+    "typescript": "5.5.3"
+  }
+}
