@@ -17,6 +17,9 @@ function startMockServer(options = {}) {
     let buffer = "";
     let mandant = null;
     let loggedIn = false;
+    /** Per SET gesetzte Darstellungsoptionen. */
+    const optionen = {};
+    let letzteAbfrage = null;
 
     const send = (line) => socket.write(Buffer.from(line + "\n", "latin1"));
 
@@ -60,6 +63,40 @@ function startMockServer(options = {}) {
         if (!loggedIn) {
           socket.end();
           return;
+        }
+
+        if (command === "SET") {
+          optionen[fields[2]] = fields[3];
+          send(`ACK|${tid}|Option gesetzt|`);
+          continue;
+        }
+
+        if (command === "EXQ") {
+          // Feldliste steht im zweiten Nutzfeld; je angefordertem Feld
+          // liefert der Server genau eine Spalte.
+          letzteAbfrage = { tid, seite: 0 };
+          send(`BOD|${tid}|2|4|`);
+          // Zahl mit Nachkommastelle - in RAW mit Punkt, sonst mit Komma.
+          const zahl = optionen.NUMMODE === "RAW" ? "2.5" : "2,5";
+          send(`D|${tid}|WIP.1479.20260914135157|1479|${zahl}|`);
+          send(`D|${tid}|WIP.1489.20260914135318|1489|1|`);
+          // eof=0: es gibt eine zweite Teilmenge
+          send(`EOD|${tid}|1|2|0|`);
+          continue;
+        }
+
+        if (command === "GNR") {
+          if (!letzteAbfrage) {
+            send(`NAK|${tid}|Keine Abfrage aktiv|1||`);
+            continue;
+          }
+          letzteAbfrage.seite += 1;
+          const zielTid = fields[1] || letzteAbfrage.tid;
+          send(`BOD|${zielTid}|1|4|`);
+          send(`D|${zielTid}|WIP.1494.20260914152223|1494|1|`);
+          // eof=1: fertig
+          send(`EOD|${zielTid}|1|1|1|`);
+          continue;
         }
 
         if (command === "GTN") {

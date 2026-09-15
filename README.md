@@ -37,13 +37,59 @@ const session = await connect({
   appName: "meine-anwendung", // erscheint in der abas-Benutzerliste
 });
 
-const tabellen = await session.query("GTN", ["31", "20", "0"]);
-for (const zeile of tabellen.rows) {
-  console.log(zeile[0], zeile[2]);
+const wip = await session.selectAll({
+  table: "31:0",
+  criteria: "pbanr=1497",
+  fields: ["such", "pbanr", "pmge", "peinh"],
+});
+
+for (const satz of wip.records) {
+  console.log(satz.such, Number(satz.pmge), satz.peinh);
 }
 
 await session.close(); // gibt die Lizenz frei
 ```
+
+`select()` liefert eine Teilmenge und meldet über `hasMore`, ob weitere
+folgen; `next()` holt die nächste. `selectAll()` nimmt einem das ab und
+liest durch — nur verwenden, wenn das Ergebnis in den Speicher passt.
+
+Sind Feldnamen angegeben, gibt es das Ergebnis zusätzlich als `records`
+(ein Objekt je Zeile). Die Zuordnung läuft über die Position: Der Server
+liefert je angefordertem Feld genau eine Spalte, auch für ungültige
+Feldnamen — ein Tippfehler verschiebt also nichts, er liefert eine leere
+Spalte.
+
+## Darstellungsoptionen
+
+Nach der Anmeldung setzt das Paket drei Optionen, die nur die
+Schreibweise ändern, nicht den Informationsgehalt:
+
+| Option | Wert | Wirkung |
+|---|---|---|
+| `NUMMODE` | `RAW` | Zahlen mit Dezimal**punkt** — `Number()` funktioniert direkt |
+| `BOOLMODE` | `NUM` | `0`/`1` statt `ja`/`nein` |
+| `DATEMODE` | `SORT` | sortierbares, sprachunabhängiges Datum |
+
+`NUMMODE` ist der wichtigste: Ohne ihn kommen Zahlen in der Schreibweise
+der Bediensprache, also mit Komma — und `Number("2,5")` ist `NaN`.
+
+Bewusst **nicht** vorgegeben sind `ENUMMODE` und `VERWMODE`, weil dort
+eine echte Abwägung ansteht. `VERWMODE=SW` liefert das Suchwort eines
+Verweises (lesbar, aber nicht eindeutig), `VERWMODE=REF` die eindeutige
+Satzreferenz wie `(4711,2,0)`. Für die WIP-Anwendung ist `SW` richtig,
+weil genau das angezeigt und auch zurückgeschrieben wird:
+
+```ts
+import { connect, DEFAULT_OPTIONS } from "@sschweimler/abas-edp";
+
+const session = await connect({
+  /* ... */
+  options: { ...DEFAULT_OPTIONS, VERWMODE: "SW" },
+});
+```
+
+Mit `options: {}` bleiben die abas-Vorgaben unangetastet.
 
 ### Mitschnitt
 
@@ -82,13 +128,24 @@ Drumherum. Erledigt sind:
 
 ## Stand
 
-Umgesetzt ist die Sitzungsebene: verbinden, anmelden, Kommandos mit
-`ACK`/`NAK`-Antwort, Datenmengen lesen (`BOD`/`D`/`DC`/`EOD`), abmelden.
-Am echten System geprüft gegen abas 2101r8n20p31, EDP 3.55.
+Umgesetzt ist das **Lesen**: verbinden, anmelden, Darstellungsoptionen
+setzen, Kommandos mit `ACK`/`NAK`-Antwort, Selektionen (`EXQ`) samt
+seitenweisem Weiterlesen (`GNR`), Datenmengen einschließlich
+Fortsetzungssätzen, abmelden.
 
-Noch nicht umgesetzt: Selektionen mit `EXQ` und Weiterlesen mit `GNR`,
-Editorkommandos zum Schreiben, Infosystem-Aufrufe, Transaktionen,
-Dialogbeantwortung (`DLG`), Fortsetzungssätze beim **Senden**.
+Am echten System geprüft gegen abas 2101r8n20p31 / EDP 3.55: Die
+gelesenen Datensätze stimmen mit denen überein, die dieselbe Anwendung
+über die REST-Middleware sieht — gleiche Anzahl, gleiche Werte, und eine
+über REST geschriebene Menge von 2,5 kommt über EDP als `2.500` zurück.
+
+Noch nicht umgesetzt: Editorkommandos zum **Schreiben** (`EDI`, `SFV`,
+`RIN`, `COM`), Infosystem-Aufrufe, Transaktionen (`TA`), Sperren (`LCK`),
+Dialogbeantwortung (`DLG`), Fortsetzungssätze beim Senden.
+
+Die Wildcard-Syntax für Selektionskriterien ist noch offen: `such=WIP.*`
+und `such=WIP.@` liefern beide nichts, während `pbanr=1497` einwandfrei
+greift. Kriterien funktionieren also, nur die Platzhalterform ist noch
+nicht ermittelt.
 
 ## Entwicklung
 

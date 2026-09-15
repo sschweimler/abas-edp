@@ -13,7 +13,13 @@
  * Bibliotheken gebunden.
  */
 
-export { EdpSession, type LoginOptions, type Dataset } from "./session";
+export {
+  EdpSession,
+  DEFAULT_OPTIONS,
+  type LoginOptions,
+  type SelectOptions,
+  type Dataset,
+} from "./session";
 export { EdpConnection, type ConnectionOptions, type LogDirection } from "./connection";
 export { EdpError, EdpTimeoutError, EdpConnectionClosedError } from "./errors";
 export {
